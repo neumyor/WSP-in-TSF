@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wsp.data import load_windows
@@ -146,6 +148,19 @@ def write_comparison(records, out_dir):
             f"| {r['model']} | {r['index']} | {p['fit']['mse']:.4f} / {p['check']['mse']:.4f} / {p['test']['mse']:.4f} | "
             f"{real['fit']['mse']:.4f} / {real['check']['mse']:.4f} / {real['test']['mse']:.4f} |"
         )
+    lines += ["", "## Per-model summary", "", "| model | runs | mean fit | mean check | mean placebo test | mean real test | tokens |", "|---|---:|---:|---:|---:|---:|---:|"]
+    def mean_pct(rows, part, section=None):
+        nodes = [row[part] if section is None else row[part][section] for row in rows]
+        return float(np.mean([100.0 * node["gain"]["gain"] / node["base"]["mse"] for node in nodes]))
+    for model in sorted({r["model"] for r in records}):
+        rows = [r for r in records if r["model"] == model]
+        lines.append(
+            f"| {model} | {len(rows)} | {mean_pct(rows, 'placebo', 'fit'):+.3f}% | "
+            f"{mean_pct(rows, 'placebo', 'check'):+.3f}% | {mean_pct(rows, 'placebo', 'test'):+.3f}% | "
+            f"{mean_pct(rows, 'real_test'):+.3f}% | "
+            f"{sum(r['driver']['usage']['total_tokens'] for r in rows)} |"
+        )
+    lines += ["", f"Total tokens: {sum(r['driver']['usage']['total_tokens'] for r in records)}."]
     with open(os.path.join(out_dir, "comparison_placebo.md"), "w") as f:
         f.write("\n".join(lines) + "\n")
     with open(os.path.join(out_dir, "comparison_placebo.json"), "w") as f:
