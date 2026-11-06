@@ -150,6 +150,7 @@ def summarize(rows, agent_test_pct, agent_check_pct):
 
     test = [row["test_gain_pct"] for row in rows]
     higher = sum(value > agent_test_pct for value in test)
+    changed = [row for row in rows if row["selected_step"] > 0]
     return dict(
         n=len(rows),
         fit=stats([row["fit_gain_pct"] for row in rows]),
@@ -159,6 +160,11 @@ def summarize(rows, agent_test_pct, agent_check_pct):
         agent_check_pct=float(agent_check_pct),
         reps_with_higher_test_gain=higher,
         fraction_higher_than_agent=higher / len(rows),
+        selected_changed=len(changed),
+        selected_changed_check_mean=float(np.mean([row["check_gain_pct"] for row in changed])) if changed else None,
+        selected_changed_test_mean=float(np.mean([row["test_gain_pct"] for row in changed])) if changed else None,
+        accepted_steps_mean=float(np.mean([row["accepted_steps"] for row in rows])),
+        step_norm_over_cap=float(rows[0]["rms"] * np.sqrt(rows[0]["k"]) / rows[0]["l2_cap"]) if rows[0]["l2_cap"] else None,
     )
 
 
@@ -235,13 +241,17 @@ def main():
         "accepts improving steps, caps the L2 norm at the agent's norm, and selects among 10 check "
         "candidates plus the unedited checkpoint. Gains are percent of the unedited MSE.",
         "",
-        "| object | coords | k | mean test | std | p5 | p95 | agent test | fraction higher than agent |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| object | coords | k | mean test | std | p5 | p95 | agent test | fraction higher than agent | selected changed | changed check | changed test | accepted steps | step norm / L2 |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in summaries:
+        changed_check = "-" if s["selected_changed_check_mean"] is None else f"{s['selected_changed_check_mean']:+.3f}%"
+        changed_test = "-" if s["selected_changed_test_mean"] is None else f"{s['selected_changed_test_mean']:+.3f}%"
         lines.append(
             f"| {s['object']} | {s['coordinate_set']} | {s['k']} | {s['test']['mean']:+.3f}% | {s['test']['std']:.3f} | "
-            f"{s['test']['p5']:+.3f}% | {s['test']['p95']:+.3f}% | {s['agent_test_pct']:+.3f}% | {s['fraction_higher_than_agent']:.3f} |"
+            f"{s['test']['p5']:+.3f}% | {s['test']['p95']:+.3f}% | {s['agent_test_pct']:+.3f}% | {s['fraction_higher_than_agent']:.3f} | "
+            f"{s['selected_changed']} | {changed_check} | {changed_test} | "
+            f"{s['accepted_steps_mean']:.2f} | {s['step_norm_over_cap']:.3f} |"
         )
     with open(os.path.join(args.out, "summary.md"), "w") as f:
         f.write("\n".join(lines) + "\n")
