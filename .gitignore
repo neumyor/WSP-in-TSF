@@ -1,0 +1,10 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+runs/
+log/
+*.ckpt
+*.pt
+resources/all_datasets/**/*.csv
+.DS_Store
