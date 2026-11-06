@@ -161,11 +161,12 @@ def summarize(rows, agent_test_pct, agent_check_pct):
         agent_check_pct=float(agent_check_pct),
         reps_with_higher_test_gain=higher,
         fraction_higher_than_agent=higher / len(rows),
+        max_test_gain_pct=float(max(test)),
         selected_changed=len(changed),
         selected_changed_check_mean=float(np.mean([row["check_gain_pct"] for row in changed])) if changed else None,
         selected_changed_test_mean=float(np.mean([row["test_gain_pct"] for row in changed])) if changed else None,
         accepted_steps_mean=float(np.mean([row["accepted_steps"] for row in rows])),
-        step_norm_over_cap=float(rows[0]["step_scale"]),
+        step_norm_over_cap=float(rows[0].get("step_scale", 1.0)),
     )
 
 
@@ -244,15 +245,15 @@ def main():
         "accepts improving steps, caps the L2 norm at the agent's norm, and selects among 10 check "
         "candidates plus the unedited checkpoint. Gains are percent of the unedited MSE.",
         "",
-        "| object | coords | step | k | mean test | std | p5 | p95 | agent test | fraction higher than agent | selected changed | changed check | changed test | accepted steps | step norm / L2 |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| object | coords | step | k | mean test | std | p5 | p95 | agent test | p (higher than agent) | max test (30 reps) | selected changed | changed check | changed test | accepted steps | step norm / L2 |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in summaries:
         changed_check = "-" if s["selected_changed_check_mean"] is None else f"{s['selected_changed_check_mean']:+.3f}%"
         changed_test = "-" if s["selected_changed_test_mean"] is None else f"{s['selected_changed_test_mean']:+.3f}%"
         lines.append(
             f"| {s['object']} | {s['coordinate_set']} | {s['step_scale']:.3f} | {s['k']} | {s['test']['mean']:+.3f}% | {s['test']['std']:.3f} | "
-            f"{s['test']['p5']:+.3f}% | {s['test']['p95']:+.3f}% | {s['agent_test_pct']:+.3f}% | {s['fraction_higher_than_agent']:.3f} | "
+            f"{s['test']['p5']:+.3f}% | {s['test']['p95']:+.3f}% | {s['agent_test_pct']:+.3f}% | {s['fraction_higher_than_agent']:.3f} | {s['max_test_gain_pct']:+.3f}% | "
             f"{s['selected_changed']} | {changed_check} | {changed_test} | "
             f"{s['accepted_steps_mean']:.2f} | {s['step_norm_over_cap']:.3f} |"
         )
