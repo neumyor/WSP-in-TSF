@@ -25,10 +25,10 @@ def block_bootstrap_ci(values, block, reps=4000, level=0.95, seed=0):
     return float(values.mean()), [float(low), float(high)]
 
 
-def paired_gain(base_losses, new_losses, block):
+def paired_gain(base_losses, new_losses, block, reps=4000):
     base_losses = np.asarray(base_losses, dtype=float)
     new_losses = np.asarray(new_losses, dtype=float)
     if base_losses.shape != new_losses.shape:
         raise ValueError("paired losses must have the same shape")
-    gain, ci = block_bootstrap_ci(base_losses - new_losses, block)
+    gain, ci = block_bootstrap_ci(base_losses - new_losses, block, reps=reps)
     return dict(gain=gain, ci=ci, relative=gain / float(base_losses.mean()))
