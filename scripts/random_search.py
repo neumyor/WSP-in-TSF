@@ -69,7 +69,7 @@ def object_stats(base_dir, run_dir):
     return model, meta, base_state, base_flat, k, l2, rms, edited_tensors
 
 
-def run_replicate(model, x_fit, y_fit, x_check, y_check, x_test, y_test, base_flat, base_losses, pool, k, l2, rms, seed, budget=100, checks=10, coordinate_set="all", bootstrap_reps=1000):
+def run_replicate(model, x_fit, y_fit, x_check, y_check, x_test, y_test, base_flat, base_losses, pool, k, l2, rms, seed, budget=100, checks=10, coordinate_set="all", bootstrap_reps=1000, step_scale=1.0):
     rng = np.random.default_rng(seed)
     coords = torch.as_tensor(rng.choice(pool, size=min(k, len(pool)), replace=False), dtype=torch.long)
     fit_subset = rng.choice(len(x_fit), size=min(512, len(x_fit)), replace=False)
@@ -80,7 +80,7 @@ def run_replicate(model, x_fit, y_fit, x_check, y_check, x_test, y_test, base_fl
     accepted = 0
     for step in range(1, budget + 1):
         proposal = delta.clone()
-        proposal[coords] += torch.from_numpy(rng.normal(0.0, rms, size=len(coords)).astype(np.float32))
+        proposal[coords] += torch.from_numpy(rng.normal(0.0, rms * step_scale, size=len(coords)).astype(np.float32))
         norm = float(proposal.norm())
         if norm > l2 > 0:
             proposal *= l2 / norm
@@ -110,6 +110,7 @@ def run_replicate(model, x_fit, y_fit, x_check, y_check, x_test, y_test, base_fl
         l2_cap=float(l2),
         rms=float(rms),
         coordinate_set=coordinate_set,
+        step_scale=float(step_scale),
         k=int(len(coords)),
         fit_mse=float(fit_mse.mean()),
         check_mse=float(check_mse.mean()),
@@ -164,7 +165,7 @@ def summarize(rows, agent_test_pct, agent_check_pct):
         selected_changed_check_mean=float(np.mean([row["check_gain_pct"] for row in changed])) if changed else None,
         selected_changed_test_mean=float(np.mean([row["test_gain_pct"] for row in changed])) if changed else None,
         accepted_steps_mean=float(np.mean([row["accepted_steps"] for row in rows])),
-        step_norm_over_cap=float(rows[0]["rms"] * np.sqrt(rows[0]["k"]) / rows[0]["l2_cap"]) if rows[0]["l2_cap"] else None,
+        step_norm_over_cap=float(rows[0]["step_scale"]),
     )
 
 
@@ -179,6 +180,7 @@ def main():
     parser.add_argument("--coordinate-sets", default="all,edited")
     parser.add_argument("--objects", default="", help="comma-separated object ids; empty means all")
     parser.add_argument("--bootstrap-reps", type=int, default=1000)
+    parser.add_argument("--step-scales", default="1.0", help="comma-separated step scales in units of the L2 cap")
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -211,24 +213,25 @@ def main():
         names = list(base_state)
         for kind in [item.strip() for item in args.coordinate_sets.split(",") if item.strip()]:
             pool = coord_indices(names, base_state, kind, edited_tensors)
-            rows = []
-            for replicate in range(1, args.replicates + 1):
-                seed = args.seed_base + object_index * 1000 + replicate
-                row = run_replicate(
-                    model, x_fit, y_fit, x_check, y_check, x_test, y_test,
-                    base_flat, base_losses, pool, k, l2, rms, seed,
-                    budget=args.budget, checks=args.checks, coordinate_set=kind,
-                    bootstrap_reps=args.bootstrap_reps,
-                )
-                row.update(object=object_id, model=model_name, coordinate_set=kind)
-                rows.append(row)
-                all_rows.append(row)
-                if replicate % 10 == 0:
-                    print(f"  {object_id} {kind}: {replicate}/{args.replicates} mean test {np.mean([r['test_gain_pct'] for r in rows]):+.3f}%", flush=True)
-            summary = summarize(rows, agent_test_pct, agent_check_pct)
-            summary.update(object=object_id, model=model_name, coordinate_set=kind, k=k, l2_cap=l2, rms=rms, edited_tensors=edited_tensors)
-            summaries.append(summary)
-            print(f"{object_id} {kind}: mean test {summary['test']['mean']:+.3f}%, agent {agent_test_pct:+.3f}%, fraction higher {summary['fraction_higher_than_agent']:.2f}", flush=True)
+            for scale in [float(item) for item in args.step_scales.split(",") if item.strip()]:
+                rows = []
+                for replicate in range(1, args.replicates + 1):
+                    seed = args.seed_base + object_index * 1000 + replicate
+                    row = run_replicate(
+                        model, x_fit, y_fit, x_check, y_check, x_test, y_test,
+                        base_flat, base_losses, pool, k, l2, rms, seed,
+                        budget=args.budget, checks=args.checks, coordinate_set=kind,
+                        bootstrap_reps=args.bootstrap_reps, step_scale=scale,
+                    )
+                    row.update(object=object_id, model=model_name, coordinate_set=kind)
+                    rows.append(row)
+                    all_rows.append(row)
+                    if replicate % 10 == 0:
+                        print(f"  {object_id} {kind} step={scale}: {replicate}/{args.replicates} mean test {np.mean([r['test_gain_pct'] for r in rows]):+.3f}%", flush=True)
+                summary = summarize(rows, agent_test_pct, agent_check_pct)
+                summary.update(object=object_id, model=model_name, coordinate_set=kind, step_scale=scale, k=k, l2_cap=l2, rms=rms, edited_tensors=edited_tensors)
+                summaries.append(summary)
+                print(f"{object_id} {kind} step={scale}: mean test {summary['test']['mean']:+.3f}%, agent {agent_test_pct:+.3f}%, fraction higher {summary['fraction_higher_than_agent']:.2f}", flush=True)
 
     with open(os.path.join(args.out, "replicates.json"), "w") as f:
         json.dump(all_rows, f, indent=2)
@@ -241,14 +244,14 @@ def main():
         "accepts improving steps, caps the L2 norm at the agent's norm, and selects among 10 check "
         "candidates plus the unedited checkpoint. Gains are percent of the unedited MSE.",
         "",
-        "| object | coords | k | mean test | std | p5 | p95 | agent test | fraction higher than agent | selected changed | changed check | changed test | accepted steps | step norm / L2 |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| object | coords | step | k | mean test | std | p5 | p95 | agent test | fraction higher than agent | selected changed | changed check | changed test | accepted steps | step norm / L2 |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in summaries:
         changed_check = "-" if s["selected_changed_check_mean"] is None else f"{s['selected_changed_check_mean']:+.3f}%"
         changed_test = "-" if s["selected_changed_test_mean"] is None else f"{s['selected_changed_test_mean']:+.3f}%"
         lines.append(
-            f"| {s['object']} | {s['coordinate_set']} | {s['k']} | {s['test']['mean']:+.3f}% | {s['test']['std']:.3f} | "
+            f"| {s['object']} | {s['coordinate_set']} | {s['step_scale']:.3f} | {s['k']} | {s['test']['mean']:+.3f}% | {s['test']['std']:.3f} | "
             f"{s['test']['p5']:+.3f}% | {s['test']['p95']:+.3f}% | {s['agent_test_pct']:+.3f}% | {s['fraction_higher_than_agent']:.3f} | "
             f"{s['selected_changed']} | {changed_check} | {changed_test} | "
             f"{s['accepted_steps_mean']:.2f} | {s['step_norm_over_cap']:.3f} |"
