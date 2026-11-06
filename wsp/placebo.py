@@ -20,9 +20,11 @@ def block_bootstrap(residual, length, block, rng):
     return residual[idx]
 
 
-def block_permute(residual, block, rng):
+def block_permute(residual, block, rng, return_order=False):
     blocks = [residual[i : i + block] for i in range(0, len(residual), block)]
-    return np.concatenate([blocks[i] for i in rng.permutation(len(blocks))], axis=0)
+    order = rng.permutation(len(blocks))
+    out = np.concatenate([blocks[i] for i in order], axis=0)
+    return (out, order.tolist()) if return_order else out
 
 
 def build_placebo_world(real_base_dir, out_dir, seed, block=192, method="permutation"):
@@ -41,6 +43,7 @@ def build_placebo_world(real_base_dir, out_dir, seed, block=192, method="permuta
     test_targets = pred_test.clone()
     rng = np.random.default_rng(seed)
     residuals = {}
+    segments = {}
     for name, idx, y_real, pred in (
         ("fit", split["fit"], y_val, pred_val),
         ("check", split["check"], y_val, pred_val),
@@ -48,10 +51,19 @@ def build_placebo_world(real_base_dir, out_dir, seed, block=192, method="permuta
     ):
         residual = (y_real - pred)[idx].cpu().numpy()
         residuals[name] = float(np.mean(residual**2))
+        boundaries = [[i, min(i + block, len(idx))] for i in range(0, len(idx), block)]
         if method == "permutation":
-            resampled = block_permute(residual, block, rng)
+            resampled, order = block_permute(residual, block, rng, return_order=True)
+            segments[name] = dict(
+                length=int(len(idx)),
+                segment_start=int(idx[0]) if len(idx) else None,
+                block=int(block),
+                block_boundaries=boundaries,
+                permutation=order,
+            )
         elif method == "bootstrap":
             resampled = block_bootstrap(residual, len(idx), block, rng)
+            segments[name] = dict(length=int(len(idx)), segment_start=int(idx[0]) if len(idx) else None, block=int(block), method="bootstrap")
         else:
             raise ValueError(f"unknown placebo method {method!r}")
         if name == "test":
@@ -85,6 +97,12 @@ def build_placebo_world(real_base_dir, out_dir, seed, block=192, method="permuta
         seed=int(seed),
         block=int(block),
         method=method,
+        level="window",
+        segments=segments,
+        overlap_note=(
+            "Residual blocks are permuted at the window level. Each residual is one 96-step, 7-variable target window; "
+            "inputs stay unchanged, so overlapping input windows no longer share a consistent underlying target series."
+        ),
         split=dict(
             n_fit=int(len(split["fit"])),
             n_check=int(len(split["check"])),

@@ -152,6 +152,18 @@ def write_comparison(records, out_dir):
         json.dump(records, f, indent=2)
 
 
+def existing_tokens(out_dir):
+    total = 0
+    if not os.path.isdir(out_dir):
+        return total
+    for name in os.listdir(out_dir):
+        path = os.path.join(out_dir, name, "agent", "driver_meta.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                total += int(json.load(f)["usage"]["total_tokens"])
+    return total
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", default="gpt-6.1-sol")
@@ -167,6 +179,8 @@ def main():
     parser.add_argument("--api-timeout", type=float, default=600.0)
     parser.add_argument("--max-tokens", type=int, default=32768)
     parser.add_argument("--context-chars", type=int, default=250000)
+    parser.add_argument("--total-token-cap", type=int, default=130000000)
+    parser.add_argument("--run-token-cap", type=int, default=30000000)
     args = parser.parse_args()
 
     os.chdir(REPO)
@@ -176,12 +190,23 @@ def main():
     if unknown:
         raise SystemExit(f"unknown model short names: {unknown}")
     records = []
+    comparison_path = os.path.join(args.out, "comparison_placebo.json")
+    if os.path.exists(comparison_path):
+        with open(comparison_path) as f:
+            records = json.load(f)
+    total_tokens = existing_tokens(args.out)
     for model in models:
         for index in range(1, args.runs_per_model + 1):
             record = run_one(model, index, args)
             records.append(record)
+            tokens = int(record["driver"]["usage"]["total_tokens"])
+            total_tokens += tokens
             write_comparison(records, args.out)
-            print(f"{model} run {index}: placebo test {fmt(record['placebo']['test'])}, real test {fmt(record['real_test'])}")
+            print(f"{model} run {index}: {tokens} tokens, placebo test {fmt(record['placebo']['test'])}, real test {fmt(record['real_test'])}", flush=True)
+            if tokens > args.run_token_cap:
+                raise SystemExit(f"stopping: {model} run {index} used {tokens} tokens, above the per-run cap")
+            if total_tokens > args.total_token_cap:
+                raise SystemExit(f"stopping: placebo runs used {total_tokens} tokens in total, above the total cap")
     print(f"written to {args.out}/comparison_placebo.md")
 
 
